@@ -22,6 +22,7 @@ from core.detect import (
     Anomaly,
     daily_metrics,
     detect_anomalies,
+    group_incidents,
     load_data,
 )
 
@@ -169,3 +170,105 @@ def test_too_short_a_series_is_rejected(daily: pd.DataFrame) -> None:
     """There must be history to predict from and to decompose."""
     with pytest.raises(ValueError, match="at least 14 days"):
         detect_anomalies(daily.iloc[:10])
+
+
+def make_anomaly(
+    day: str,
+    metric: str = "revenue",
+    pct: float = 0.1,
+    z: float = 5.0,
+    severity: str = "high",
+    method: str = "stl_mad",
+) -> Anomaly:
+    """A well-formed anomaly record for grouping tests."""
+    return Anomaly(
+        date=pd.Timestamp(day).date(),
+        metric=metric,
+        value=1.0,
+        expected=1.0,
+        pct_change=pct,
+        z=z,
+        severity=severity,
+        method=method,
+    )
+
+
+def test_group_incidents_merges_adjacent_days() -> None:
+    """Consecutive or near-consecutive days on one metric form one incident."""
+    first = make_anomaly("2026-09-04", "refunds", pct=1.0)
+    second = make_anomaly("2026-09-05", "refunds", pct=0.8)
+    loner = make_anomaly("2026-09-08", "refunds", pct=0.6)
+
+    incidents = group_incidents([first, second, loner])
+
+    assert len(incidents) == 2
+    first_incident = incidents[0]
+    assert first_incident["start_date"] == pd.Timestamp("2026-09-04").date()
+    assert first_incident["end_date"] == pd.Timestamp("2026-09-05").date()
+    assert first_incident["days"] == 2
+    assert first_incident["metric"] == "refunds"
+    assert first_incident["peak_date"] == pd.Timestamp("2026-09-04").date()
+    assert incidents[1]["days"] == 1
+
+
+def test_gap_of_two_days_still_merges() -> None:
+    """A day two days after the last still belongs to the same story."""
+    incidents = group_incidents(
+        [make_anomaly("2026-09-04"), make_anomaly("2026-09-06")]
+    )
+    assert len(incidents) == 1
+    assert incidents[0]["days"] == 2
+
+
+def test_peak_and_severity_come_from_the_loudest_member() -> None:
+    """The peak is the member that moved furthest, not the first one."""
+    quiet_first = make_anomaly("2026-09-04", pct=0.02, z=3.7, severity="low")
+    loud_later = make_anomaly("2026-09-05", pct=-0.25, z=8.0, severity="high")
+
+    incidents = group_incidents([quiet_first, loud_later])
+
+    assert incidents[0]["peak_date"] == pd.Timestamp("2026-09-05").date()
+    assert incidents[0]["peak_pct_change"] == -0.25
+    assert incidents[0]["severity"] == "high"
+    assert incidents[0]["peak_method"] == "stl_mad"
+
+
+def test_incidents_sort_by_severity_then_peak() -> None:
+    """High first even against a low-severity incident with a bigger peak."""
+    low_loud = make_anomaly("2026-08-01", metric="orders", pct=1.0, z=9.0, severity="low")
+    high_quiet = make_anomaly("2026-09-20", metric="refunds", pct=0.01, z=3.8, severity="high")
+
+    incidents = group_incidents([low_loud, high_quiet])
+
+    assert len(incidents) == 2
+    assert incidents[0]["metric"] == "refunds"
+    assert incidents[1]["metric"] == "orders"
+
+
+def test_methods_union_and_records_are_kept() -> None:
+    """The incident carries every detection method and, in date order, its days."""
+    forest_only = make_anomaly("2026-09-05", metric="sessions", method="isolation_forest")
+    both = make_anomaly("2026-09-06", metric="sessions", pct=0.4, method="stl_mad+isolation_forest")
+
+    incidents = group_incidents([forest_only, both])
+
+    assert incidents[0]["methods"] == ["isolation_forest", "stl_mad+isolation_forest"]
+    dates = [record["date"] for record in incidents[0]["records"]]
+    assert dates == sorted(dates)
+    assert len(dates) == 2
+
+
+def test_grouped_incidents_cover_the_injected_anomalies(anomalies: list[Anomaly]) -> None:
+    """Every injected anomaly has an incident that spans its onset."""
+    incidents = group_incidents(anomalies)
+
+    for entry in truth_entries():
+        metric = str(entry["metric"])
+        onset = pd.Timestamp(str(entry["date_start"])).date()
+        covering = [
+            incident
+            for incident in incidents
+            if incident["metric"] == metric
+            and incident["start_date"] <= onset <= incident["end_date"]
+        ]
+        assert covering, f"no incident covers {metric} breaking on {onset}"

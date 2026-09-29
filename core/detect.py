@@ -293,3 +293,95 @@ def detect_anomalies(
             )
 
     return sorted(anomalies, key=lambda anomaly: (anomaly["date"], -abs(anomaly["z"])))
+
+
+# How far apart two flagged days on the same metric may be and still be treated
+# as one story. A gap of two days lets a metric stutter through a loud weekday
+# without spawning a separate incident for it.
+INCIDENT_MAX_GAP_DAYS: int = 2
+
+# Order that decides which of several incidents is the most important.
+SEVERITY_RANKING: dict[str, int] = {SEVERITY_HIGH: 0, SEVERITY_MEDIUM: 1, SEVERITY_LOW: 2}
+
+
+class Incident(TypedDict):
+    """A run of anomalous days on one metric, presented as one story.
+
+    Days recorded within ``INCIDENT_MAX_GAP_DAYS`` of each other are grouped
+    together. The peak day is the member that moved furthest from its seasonal
+    expectation, by |pct_change| and then |z|.
+    """
+
+    metric: str
+    start_date: date
+    end_date: date
+    days: int
+    peak_date: date
+    peak_value: float
+    peak_expected: float
+    peak_pct_change: float | None
+    peak_z: float
+    severity: str
+    methods: list[str]
+    records: list[Anomaly]
+
+
+def _peak_key(anomaly: Anomaly) -> tuple[float, float]:
+    """How loud one anomaly is: peak change first, then peak z-score."""
+    return (abs(anomaly["pct_change"] or 0.0), abs(anomaly["z"]))
+
+
+def _incident_severity(members: list[Anomaly]) -> str:
+    """An incident's severity is its most severe day's severity."""
+    return min(members, key=lambda anomaly: SEVERITY_RANKING[anomaly["severity"]])["severity"]
+
+
+def group_incidents(anomalies: list[Anomaly], max_gap_days: int = INCIDENT_MAX_GAP_DAYS) -> list[Incident]:
+    """Cluster the flagged days per metric into incidents.
+
+    A flagged day joins the previous incident on its metric when it falls within
+    ``max_gap_days`` of it, otherwise it starts a new one. Each cluster becomes
+    an incident carrying its loudest day as the peak plus the union of detection
+    methods across the run.
+
+    Incidents are returned most severe first; ties are broken by how far the
+    peak moved from expectation.
+    """
+    clusters_by_metric: dict[str, list[list[Anomaly]]] = {metric: [] for metric in METRICS}
+    for anomaly in sorted(anomalies, key=lambda item: item["date"]):
+        clusters = clusters_by_metric[anomaly["metric"]]
+        if clusters and (anomaly["date"] - clusters[-1][-1]["date"]).days <= max_gap_days:
+            clusters[-1].append(anomaly)
+        else:
+            clusters.append([anomaly])
+
+    incidents: list[Incident] = []
+    for clusters in clusters_by_metric.values():
+        for members in clusters:
+            peak = max(members, key=_peak_key)
+            incidents.append(
+                Incident(
+                    metric=members[0]["metric"],
+                    start_date=min(member["date"] for member in members),
+                    end_date=max(member["date"] for member in members),
+                    days=len(members),
+                    peak_date=peak["date"],
+                    peak_value=peak["value"],
+                    peak_expected=peak["expected"],
+                    peak_pct_change=peak["pct_change"],
+                    peak_z=peak["z"],
+                    peak_method=peak["method"],
+                    severity=_incident_severity(members),
+                    methods=sorted({member["method"] for member in members}),
+                    records=sorted(members, key=lambda member: member["date"]),
+                )
+            )
+
+    incidents.sort(
+        key=lambda incident: (
+            SEVERITY_RANKING[incident["severity"]],
+            -abs(incident["peak_pct_change"] or 0.0),
+            -abs(incident["peak_z"]),
+        )
+    )
+    return incidents
