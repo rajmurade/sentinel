@@ -13,9 +13,6 @@ env/
 .ruff_cache/
 
 # Data (generated datasets and vector store); the generator script is tracked
-data/*
-!data/generate.py
-!data/.gitkeep
 
 # Streamlit
 .streamlit/secrets.toml

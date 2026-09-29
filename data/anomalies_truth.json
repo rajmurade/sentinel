@@ -1,0 +1,42 @@
+{
+  "dataset": "sample.csv",
+  "seed": 42,
+  "start_date": "2026-04-01",
+  "end_date": "2026-09-27",
+  "days": 180,
+  "anomaly_window_days": 40,
+  "anomalies": [
+    {
+      "id": "a",
+      "metric": "revenue",
+      "segment": {
+        "device": "mobile",
+        "channel": "organic"
+      },
+      "date_start": "2026-08-21",
+      "date_end": "2026-09-27",
+      "description": "Checkout breakage on mobile organic traffic: conversion collapses, so revenue falls with no drop in sessions."
+    },
+    {
+      "id": "b",
+      "metric": "refunds",
+      "segment": {
+        "product_category": "electronics"
+      },
+      "date_start": "2026-09-04",
+      "date_end": "2026-09-27",
+      "description": "Bad electronics batch: refunds spike while revenue and sessions are unchanged."
+    },
+    {
+      "id": "c",
+      "metric": "sessions",
+      "segment": {
+        "channel": "paid"
+      },
+      "date_start": "2026-09-16",
+      "date_end": "2026-09-27",
+      "description": "Bot flood on paid traffic: sessions surge while conversion collapses, leaving orders and revenue roughly flat.",
+      "secondary_metric": "conversion_rate"
+    }
+  ]
+}
