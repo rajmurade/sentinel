@@ -1,0 +1,11 @@
+pandas
+numpy
+scikit-learn
+statsmodels
+plotly
+streamlit
+chromadb
+sentence-transformers
+requests
+python-dotenv
+pytest

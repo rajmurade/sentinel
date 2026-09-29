@@ -1,0 +1,5 @@
+"""Data directory.
+
+Holds sample/generated metric datasets and the Chroma persistence directory.
+Contents are git-ignored; the directory is tracked only via ``.gitkeep``.
+"""
