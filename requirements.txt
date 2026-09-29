@@ -1,11 +1,20 @@
-pandas
-numpy
-scikit-learn
-statsmodels
-plotly
-streamlit
-chromadb
-sentence-transformers
-requests
-python-dotenv
-pytest
+# Sentinel runtime. Ranges are compatible with Python 3.12 (Hugging Face Spaces)
+# and the versions the test suite runs against.
+streamlit>=1.40,<2
+pandas>=2.2,<3
+numpy>=1.26,<3
+scikit-learn>=1.4,<2
+statsmodels>=0.14,<1
+plotly>=5.24,<7
+
+# Incident memory. Chroma's built-in ONNX embeddings, so no sentence-transformers
+# and no PyTorch; the app falls back to TF-IDF if this is unavailable.
+chromadb>=0.5,<2
+onnxruntime>=1.17,<2
+
+# Alert delivery and configuration.
+requests>=2.32,<3
+python-dotenv>=1.0,<2
+
+# Tests
+pytest>=8,<10

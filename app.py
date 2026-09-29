@@ -1,10 +1,10 @@
 """Sentinel — AI metric watchdog UI.
 
-Runs the detection and root-cause drilldown pipeline over the sample dataset or
-an uploaded CSV, and renders one chart per metric plus incident cards with a
-drilldown panel. Narration is deterministic for now; the LLM is not wired in.
-Incident memory and alert delivery are wired in, and both degrade cleanly when
-their configuration is missing.
+Runs the detection and root-cause drilldown pipeline over the bundled demo
+dataset or an uploaded CSV, and renders one chart per metric plus incident cards
+with a drilldown panel. Narration is deterministic for now; the LLM is optional
+and not wired in, so the app needs no secrets to run. Incident memory and alert
+delivery are wired in, and both degrade cleanly when unconfigured.
 """
 
 from __future__ import annotations
@@ -49,6 +49,15 @@ DIM_LABELS: dict[str, str] = {
 }
 
 st.set_page_config(page_title="Sentinel", layout="wide")
+
+
+DEMO_MODE_DEFAULT: bool = True
+
+DEMO_CAPTION: str = (
+    "Demo mode: the bundled synthetic dataset, with anomalies injected on purpose. "
+    "Open any incident to see the root cause. Past incidents shown are seeded examples, not real history."
+)
+UPLOAD_CAPTION: str = "Analyzing your uploaded dataset. Flagged days are marked on each chart."
 
 
 def ensure_sample_data() -> None:
@@ -96,9 +105,18 @@ def incident_report(frame: pd.DataFrame, incident: Incident) -> dict[str, Any]:
     return template_report(incident, build_evidence(frame, incident))
 
 
-def seed_memory() -> None:
-    """Seed the demo incidents once, on first start, never failing the app."""
+def warm_up_memory() -> None:
+    """Load the embedding model and seed the demo incidents, never failing the app.
+
+    Doing this at startup keeps the first "Similar past incidents" click fast
+    instead of paying the ONNX model load while the user is waiting.
+    """
     try:
+        if not memory.warm_up_embedding():
+            st.caption(
+                "Semantic recall is unavailable, so past-incident search uses "
+                "TF-IDF keyword similarity."
+            )
         memory.seed_demo_incidents()
     except Exception as exc:  # noqa: BLE001 - memory is optional, degrade the run
         st.warning(f"Incident memory is unavailable: {ui_helpers.friendly_error(exc)}")
@@ -136,10 +154,10 @@ def render_recent_alerts(limit: int = 5) -> None:
     if not entries:
         return
     st.sidebar.markdown("**Recent alerts**")
-    for entry in entries:
-        st.sidebar.caption(
-            f"{entry['timestamp']} · {entry['channel']} · {entry['status']} · {entry['headline']}"
-        )
+    for entry in reversed(entries):  # newest first
+        icon = "✅" if entry["status"] == "sent" else "⚠️"
+        sent_at = entry["timestamp"].replace("T", " ").replace("+00:00", " UTC")
+        st.sidebar.caption(f"{icon} {sent_at} · {entry['channel']} · {entry['headline']}")
 
 
 def augment_conversion_rate(frame: pd.DataFrame) -> pd.DataFrame:
@@ -254,14 +272,19 @@ def render_incident(incident: Incident, frame: pd.DataFrame) -> None:
 
 def main() -> None:
     ensure_sample_data()
-    seed_memory()
+    with st.spinner("Warming up the incident memory…"):
+        warm_up_memory()
 
     with st.sidebar:
         st.header("Sentinel")
         st.caption("AI metric watchdog")
-        data_source = st.radio("Data source", ["Sample dataset", "Upload a CSV"])
+        demo_mode = st.checkbox(
+            "Demo mode",
+            value=DEMO_MODE_DEFAULT,
+            help="Runs the bundled synthetic dataset. Turn this off to analyze your own CSV.",
+        )
         uploaded = None
-        if data_source == "Upload a CSV":
+        if not demo_mode:
             uploaded = st.file_uploader("CSV file", type=["csv"])
         sensitivity = st.slider(
             "Sensitivity",
@@ -276,14 +299,20 @@ def main() -> None:
             show_alert_result(*deliver_alert(TEST_ALERT_TEXT))
         render_recent_alerts()
 
-    source: str | bytes = str(SAMPLE_CSV) if uploaded is None else uploaded.getvalue()
+    if not demo_mode and uploaded is None:
+        st.info("Upload a CSV to analyze your own metrics, or turn Demo mode back on.")
+        return
 
-    if run_clicked or "incidents" not in st.session_state:
+    source: str | bytes = str(SAMPLE_CSV) if uploaded is None else uploaded.getvalue()
+    source_key: str = uploaded.name if uploaded is not None else SAMPLE_CSV.name
+
+    if run_clicked or st.session_state.get("source_key") != source_key:
         try:
             frame = augment_conversion_rate(load_dataset(source))
             daily = daily_metrics(frame)
             st.session_state.frame = frame
             st.session_state.daily = daily
+            st.session_state.source_key = source_key
             st.session_state.incidents = run_watchdog(daily, sensitivity)
         except Exception as exc:  # noqa: BLE001 - surface any run error to the user
             st.error(ui_helpers.friendly_error(exc))
@@ -298,10 +327,11 @@ def main() -> None:
 
     flagged = ui_helpers.flagged_dates_by_metric(incidents)
     st.title("Metric watchdog")
+    st.caption(DEMO_CAPTION if demo_mode else UPLOAD_CAPTION)
     for metric in METRICS:
         st.plotly_chart(ui_helpers.metric_chart(st.session_state.daily, metric, flagged[metric]), width="stretch")
 
-    st.subheader("Incidents")
+    st.subheader(f"Incidents ({len(incidents)})")
     for incident in incidents:
         render_incident(incident, st.session_state.frame)
 

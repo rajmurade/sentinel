@@ -30,6 +30,9 @@ from pathlib import Path
 from typing import Any
 
 CHROMA_DIR_DEFAULT: Path = Path(".chroma")
+
+_UNSET: Any = object()
+_EMBEDDING_FUNCTION: Any = _UNSET
 COLLECTION_KEY: str = "sentinel_incidents"
 DEFAULT_K: int = 3
 
@@ -44,15 +47,26 @@ def _embedding_function() -> Any:
 
     Returns Chroma's built-in default embedding function. If it is unavailable
     the caller falls back to TF-IDF, so this may return ``None``.
+
+    The result is cached on the function itself: the ONNX model behind
+    Chroma's default embedding function takes a noticeable moment to load, and
+    the app should pay that cost once at startup rather than on the first click.
     """
+    global _EMBEDDING_FUNCTION
+    if _EMBEDDING_FUNCTION is not _UNSET:
+        return _EMBEDDING_FUNCTION
     try:
         from chromadb.utils.embedding_functions import (  # type: ignore[import-untyped]
             DefaultEmbeddingFunction,
         )
 
-        return DefaultEmbeddingFunction()
+        _EMBEDDING_FUNCTION = DefaultEmbeddingFunction()
     except Exception:  # noqa: BLE001 - fall back to TF-IDF below
-        return None
+        _EMBEDDING_FUNCTION = None
+    return _EMBEDDING_FUNCTION
+
+
+
 
 
 def _new_id() -> str:
@@ -190,6 +204,18 @@ def reset_store() -> None:
     """Drop the cached store. Used by tests and after a config change."""
     global _STORE
     _STORE = None
+
+
+def warm_up_embedding() -> bool:
+    """Force the embedding model to load now instead of on the first query.
+
+    Returns ``True`` when a real embedding function is available, ``False`` when
+    the caller should expect the TF-IDF fallback. Never raises.
+    """
+    try:
+        return _embedding_function() is not None
+    except Exception:  # noqa: BLE001 - memory is optional, degrade the run
+        return False
 
 
 def _document(headline: str, metric: str, driver: str, cause: str) -> str:

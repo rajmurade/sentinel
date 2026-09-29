@@ -44,9 +44,9 @@ than an analysis bug.
 | `app.py` | Streamlit UI: upload/run, charts, narrative, alert toggle |
 | `core/detect.py` | Load daily metrics, flag anomalies (scikit-learn / statsmodels) |
 | `core/rootcause.py` | Pure-Python dimension drilldown to find the responsible segment |
-| `core/agent.py` | LLM narration from tool output, with template fallback |
-| `core/memory.py` | Persist and retrieve past incidents (Chroma + sentence-transformers) |
-| `core/alerts.py` | POST the incident summary to a Discord/Slack webhook |
+| `core/agent.py` | Grounded narration from tool output, template fallback; LLM optional and not yet wired |
+| `core/memory.py` | Persist and retrieve past incidents (Chroma, built-in ONNX embeddings, no sentence-transformers/PyTorch, with a TF-IDF + cosine fallback) |
+| `core/alerts.py` | POST the incident summary to a Discord/Slack webhook, or email over SMTP |
 | `data/` | Sample/generated datasets, Chroma persistence dir |
 
 ## Data shape (assumed)
