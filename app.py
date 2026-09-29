@@ -2,8 +2,9 @@
 
 Runs the detection and root-cause drilldown pipeline over the sample dataset or
 an uploaded CSV, and renders one chart per metric plus incident cards with a
-drilldown panel. The LLM narration, memory, and alert steps are intentionally
-not wired in here yet.
+drilldown panel. Narration is deterministic for now; the LLM is not wired in.
+Incident memory and alert delivery are wired in, and both degrade cleanly when
+their configuration is missing.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
-from core import memory, rootcause, ui_helpers
+from core import alerts, memory, rootcause, ui_helpers
 from core.agent import build_evidence, template_report
 from core.detect import (
     DEFAULT_SENSITIVITY,
@@ -32,6 +33,13 @@ from core.detect import (
 ROOT: Path = Path(__file__).resolve().parent
 SAMPLE_CSV: Path = ROOT / "data" / "sample.csv"
 GENERATOR: Path = ROOT / "data" / "generate.py"
+
+TEST_ALERT_TEXT: str = (
+    "HEADLINE: Sentinel test alert\n"
+    "SEVERITY: info\n"
+    "WHAT CHANGED: nothing — this is a test of the alert channel.\n"
+    "LIKELY DRIVER: none, this is a connectivity check."
+)
 
 DIM_LABELS: dict[str, str] = {
     "region": "By region",
@@ -103,6 +111,35 @@ def similar_past_incidents(report: dict[str, Any], metric: str) -> list[dict[str
     except Exception as exc:  # noqa: BLE001 - memory is optional, degrade the run
         st.warning(f"Could not reach incident memory: {ui_helpers.friendly_error(exc)}")
         return []
+
+
+def deliver_alert(report_text: str) -> tuple[bool, str]:
+    """Send the summary to every configured channel, reporting each outcome."""
+    webhook_ok, webhook_message = alerts.send_webhook(report_text)
+    email_ok, email_message = alerts.send_email(report_text)
+    return (webhook_ok or email_ok), f"{webhook_message}. Email: {email_message}"
+
+
+def show_alert_result(ok: bool, message: str) -> None:
+    """Render a delivery outcome, with a nudge when nothing is configured."""
+    if ok:
+        st.success(message)
+    elif "not configured" in message:
+        st.info(f"{message}. Set WEBHOOK_URL in .env to enable alerts.")
+    else:
+        st.warning(message)
+
+
+def render_recent_alerts(limit: int = 5) -> None:
+    """The last few delivery attempts, read straight from the alert log."""
+    entries = alerts.recent_alerts(limit)
+    if not entries:
+        return
+    st.sidebar.markdown("**Recent alerts**")
+    for entry in entries:
+        st.sidebar.caption(
+            f"{entry['timestamp']} · {entry['channel']} · {entry['status']} · {entry['headline']}"
+        )
 
 
 def augment_conversion_rate(frame: pd.DataFrame) -> pd.DataFrame:
@@ -195,6 +232,9 @@ def render_incident(incident: Incident, frame: pd.DataFrame) -> None:
                                     st.success("Cause recorded — it will inform future similar incidents.")
                                 except Exception as exc:  # noqa: BLE001
                                     st.error(f"Could not save the cause: {ui_helpers.friendly_error(exc)}")
+
+                        if st.button("Send alert", key=f"send_alert_{metric}_{peak}"):
+                            show_alert_result(*deliver_alert(alerts.format_alert(incident, report)))
                     elif name in DIM_LABELS.values():
                         dim = next(key for key, label in DIM_LABELS.items() if label == name)
                         payload = drilldown_dimension(frame, metric, peak, dim)
@@ -232,6 +272,9 @@ def main() -> None:
             help="A day must clear this many robust z-scores to be flagged.",
         )
         run_clicked = st.button("Run watchdog", type="primary", width="stretch")
+        if st.button("Send test alert", width="stretch"):
+            show_alert_result(*deliver_alert(TEST_ALERT_TEXT))
+        render_recent_alerts()
 
     source: str | bytes = str(SAMPLE_CSV) if uploaded is None else uploaded.getvalue()
 

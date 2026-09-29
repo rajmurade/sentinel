@@ -20,6 +20,9 @@ env/
 # Vector store
 .chroma/
 
+# Alert delivery log
+alerts_log.jsonl
+
 # Editors / OS
 .vscode/
 .idea/
