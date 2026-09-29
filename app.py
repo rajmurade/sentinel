@@ -18,6 +18,7 @@ import pandas as pd
 import streamlit as st
 
 from core import rootcause, ui_helpers
+from core.agent import build_evidence, template_report
 from core.detect import (
     DEFAULT_SENSITIVITY,
     METRICS,
@@ -81,6 +82,12 @@ def drilldown_ratio(frame: pd.DataFrame, day: str) -> dict[str, Any]:
     return rootcause.ratio_decomposition(frame, day)
 
 
+@st.cache_data(show_spinner=False)
+def incident_report(frame: pd.DataFrame, incident: Incident) -> dict[str, Any]:
+    """Deterministic narrative from the drilldown tools (no LLM wired yet)."""
+    return template_report(incident, build_evidence(frame, incident))
+
+
 def augment_conversion_rate(frame: pd.DataFrame) -> pd.DataFrame:
     """Add per-segment conversion_rate (orders / sessions) for drilldowns."""
     copy = frame.copy()
@@ -113,7 +120,8 @@ def render_incident(incident: Incident, frame: pd.DataFrame) -> None:
                 f"(z = {incident['peak_z']:.2f}, method {incident['peak_method']})."
             )
 
-            tab_names = [DIM_LABELS[dim] for dim in rootcause.SEGMENT_DIMENSIONS]
+            tab_names = ["Report"]
+            tab_names.extend(DIM_LABELS[dim] for dim in rootcause.SEGMENT_DIMENSIONS)
             tab_names.append("Top drivers")
             if metric == "revenue":
                 tab_names.append("Revenue split")
@@ -121,7 +129,19 @@ def render_incident(incident: Incident, frame: pd.DataFrame) -> None:
 
             for index, name in enumerate(tab_names):
                 with tabs[index]:
-                    if name in DIM_LABELS.values():
+                    if name == "Report":
+                        report = incident_report(frame, incident)
+                        st.markdown(f"**{report['headline']}**")
+                        st.caption(f"Severity: {report['severity'].upper()}")
+                        st.markdown(report["what_changed"])
+                        st.markdown(report["likely_driver"])
+                        st.markdown("**Evidence**")
+                        for line in report["evidence"]:
+                            st.markdown(f"- {line}")
+                        st.markdown("**Recommended checks**")
+                        for action in report["recommended_actions"]:
+                            st.markdown(f"- {action}")
+                    elif name in DIM_LABELS.values():
                         dim = next(key for key, label in DIM_LABELS.items() if label == name)
                         payload = drilldown_dimension(frame, metric, peak, dim)
                         st.plotly_chart(ui_helpers.contribution_chart(payload), width="stretch")
