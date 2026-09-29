@@ -12,8 +12,9 @@ env/
 .mypy_cache/
 .ruff_cache/
 
-# Data (generated datasets and vector store)
+# Data (generated datasets and vector store); the generator script is tracked
 data/*
+!data/generate.py
 !data/.gitkeep
 
 # Streamlit
