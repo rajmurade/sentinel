@@ -17,6 +17,9 @@ env/
 # Streamlit
 .streamlit/secrets.toml
 
+# Vector store
+.chroma/
+
 # Editors / OS
 .vscode/
 .idea/

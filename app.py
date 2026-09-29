@@ -17,7 +17,7 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
-from core import rootcause, ui_helpers
+from core import memory, rootcause, ui_helpers
 from core.agent import build_evidence, template_report
 from core.detect import (
     DEFAULT_SENSITIVITY,
@@ -88,6 +88,23 @@ def incident_report(frame: pd.DataFrame, incident: Incident) -> dict[str, Any]:
     return template_report(incident, build_evidence(frame, incident))
 
 
+def seed_memory() -> None:
+    """Seed the demo incidents once, on first start, never failing the app."""
+    try:
+        memory.seed_demo_incidents()
+    except Exception as exc:  # noqa: BLE001 - memory is optional, degrade the run
+        st.warning(f"Incident memory is unavailable: {ui_helpers.friendly_error(exc)}")
+
+
+def similar_past_incidents(report: dict[str, Any], metric: str) -> list[dict[str, Any]]:
+    """Past incidents showing a similar pattern, or an empty list on failure."""
+    try:
+        return memory.find_similar({**report, "metric": metric})
+    except Exception as exc:  # noqa: BLE001 - memory is optional, degrade the run
+        st.warning(f"Could not reach incident memory: {ui_helpers.friendly_error(exc)}")
+        return []
+
+
 def augment_conversion_rate(frame: pd.DataFrame) -> pd.DataFrame:
     """Add per-segment conversion_rate (orders / sessions) for drilldowns."""
     copy = frame.copy()
@@ -141,6 +158,43 @@ def render_incident(incident: Incident, frame: pd.DataFrame) -> None:
                         st.markdown("**Recommended checks**")
                         for action in report["recommended_actions"]:
                             st.markdown(f"- {action}")
+
+                        st.markdown("**Similar past incidents**")
+                        st.caption("Same-shaped pattern in earlier incidents, not necessarily the same cause.")
+                        matches = similar_past_incidents(report, metric)
+                        if not matches:
+                            st.caption("No similar past incidents recorded yet.")
+                        for match in matches:
+                            demo_tag = " · demo data" if match["is_demo"] else ""
+                            st.markdown(
+                                f"- {match['date']} — {match['headline']} · "
+                                f"similarity {match['similarity']:.0%} · "
+                                f"recorded cause: {match['cause']}{demo_tag}"
+                            )
+
+                        with st.form(key=f"cause_form_{metric}_{peak}"):
+                            cause_input = st.text_input(
+                                "Mark cause / resolve",
+                                placeholder="What actually caused this? (stored for future recall)",
+                            )
+                            submitted = st.form_submit_button("Save cause")
+                        if submitted:
+                            cause_text = cause_input.strip()
+                            if not cause_text:
+                                st.warning("Enter a cause before saving.")
+                            else:
+                                try:
+                                    memory.add_incident(
+                                        headline=report["headline"],
+                                        metric=metric,
+                                        driver=report["likely_driver"],
+                                        cause=cause_text,
+                                        date=peak,
+                                        is_demo=False,
+                                    )
+                                    st.success("Cause recorded — it will inform future similar incidents.")
+                                except Exception as exc:  # noqa: BLE001
+                                    st.error(f"Could not save the cause: {ui_helpers.friendly_error(exc)}")
                     elif name in DIM_LABELS.values():
                         dim = next(key for key, label in DIM_LABELS.items() if label == name)
                         payload = drilldown_dimension(frame, metric, peak, dim)
@@ -160,6 +214,7 @@ def render_incident(incident: Incident, frame: pd.DataFrame) -> None:
 
 def main() -> None:
     ensure_sample_data()
+    seed_memory()
 
     with st.sidebar:
         st.header("Sentinel")
